@@ -26,4 +26,4 @@ COPY --from=builder /app/udptlspipe /
 EXPOSE 8443/tcp
 EXPOSE 8443/udp
 
-ENTRYPOINT ["/udptlspipe", "-l", "127.0.0.1:8443"]
+ENTRYPOINT ["/udptlspipe", "-l", "0.0.0.0:8443"]
