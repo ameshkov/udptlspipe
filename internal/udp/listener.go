@@ -231,7 +231,7 @@ func (c *udpConn) LocalAddr() (addr net.Addr) {
 
 // RemoteAddr implements the net.Conn interface for *udpConn.
 func (c *udpConn) RemoteAddr() (addr net.Addr) {
-	return c.conn.RemoteAddr()
+	return c.peerAddr
 }
 
 // SetDeadline implements the net.Conn interface for *udpConn.

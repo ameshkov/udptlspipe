@@ -4,13 +4,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"math/big"
 	"time"
+
+	tls "github.com/refraction-networking/utls"
 )
 
 // createServerTLSConfig creates a TLS pipe configuration with the specified
@@ -33,7 +34,7 @@ func createServerTLSConfig(tlsServerName string) (tlsConfig *tls.Config) {
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			Organization: []string{"AdGuard Tests"},
+			Organization: []string{tlsServerName},
 		},
 		NotBefore: notBefore,
 		NotAfter:  notAfter,

@@ -15,14 +15,14 @@ func Tunnel(pipeName string, left io.ReadWriter, right io.ReadWriter) {
 	wg := &sync.WaitGroup{}
 	wg.Add(2)
 
-	go copyConn(fmt.Sprintf("%s left->right", pipeName), left, right, wg)
-	go copyConn(fmt.Sprintf("%s left<-right", pipeName), right, left, wg)
+	go pipe(fmt.Sprintf("%s left->right", pipeName), left, right, wg)
+	go pipe(fmt.Sprintf("%s left<-right", pipeName), right, left, wg)
 
 	wg.Wait()
 }
 
-// copyConn copies data from reader r to writer r.
-func copyConn(pipeName string, r io.Reader, w io.Writer, wg *sync.WaitGroup) {
+// pipe copies data from reader r to writer w.
+func pipe(pipeName string, r io.Reader, w io.Writer, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	buf := make([]byte, 65536)

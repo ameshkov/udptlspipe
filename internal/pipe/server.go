@@ -3,21 +3,28 @@
 package pipe
 
 import (
+	"bufio"
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/textproto"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/ameshkov/udptlspipe/internal/udp"
-
 	"github.com/AdguardTeam/golibs/log"
 	"github.com/ameshkov/udptlspipe/internal/tunnel"
+	"github.com/ameshkov/udptlspipe/internal/udp"
+	tls "github.com/refraction-networking/utls"
+	"golang.org/x/net/proxy"
 )
+
+const authTimeout = time.Second * 60
 
 // Server represents an udptlspipe pipe. Depending on whether it is created in
 // server- or client- mode, it listens to TLS or UDP connections and pipes the
@@ -25,7 +32,12 @@ import (
 type Server struct {
 	listenAddr      string
 	destinationAddr string
+	dialer          proxy.Dialer
 	serverMode      bool
+
+	// password is a string that the server will search for in the first bytes.
+	// If not found, the server will return a stub web page.
+	password string
 
 	// listen is the TLS listener for incoming connections
 	listen net.Listener
@@ -51,16 +63,39 @@ type Server struct {
 }
 
 // NewServer creates a new instance of a *Server.
-func NewServer(listenAddr string, destinationAddr string, serverMode bool) (s *Server, err error) {
-	return &Server{
+func NewServer(
+	listenAddr string,
+	destinationAddr string,
+	password string,
+	proxyURL string,
+	serverMode bool,
+) (s *Server, err error) {
+	s = &Server{
 		listenAddr:      listenAddr,
 		destinationAddr: destinationAddr,
+		password:        password,
+		dialer:          proxy.Direct,
 		serverMode:      serverMode,
 		srcConns:        map[net.Conn]struct{}{},
 		srcConnsMu:      &sync.Mutex{},
 		dstConns:        map[net.Conn]struct{}{},
 		dstConnsMu:      &sync.Mutex{},
-	}, nil
+	}
+
+	if proxyURL != "" {
+		var u *url.URL
+		u, err = url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL: %w", err)
+		}
+
+		s.dialer, err = proxy.FromURL(u, s.dialer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize proxy dialer: %w", err)
+		}
+	}
+
+	return s, nil
 }
 
 // Addr returns the address the pipe listens to if it is started or nil.
@@ -215,6 +250,8 @@ func (s *Server) acceptConn() (err error) {
 		return err
 	}
 
+	log.Debug("Accepted new connection from %s", conn.RemoteAddr())
+
 	func() {
 		s.srcConnsMu.Lock()
 		defer s.srcConnsMu.Unlock()
@@ -269,6 +306,8 @@ func (s *Server) serveConn(conn net.Conn) {
 	dstConn, err := s.dialDst()
 	if err != nil {
 		log.Error("failed to connect to %s: %v", s.destinationAddr, err)
+
+		return
 	}
 
 	func() {
@@ -278,6 +317,16 @@ func (s *Server) serveConn(conn net.Conn) {
 		// Track the connection to allow unblocking reads on shutdown.
 		s.dstConns[dstConn] = struct{}{}
 	}()
+
+	if s.serverMode && !s.checkAuth(conn) {
+		// Client connection has not been authorized, closing the connection.
+		return
+	}
+
+	if !s.serverMode {
+		// Authorize the client if necessary.
+		s.auth(dstConn)
+	}
 
 	var srcRw, dstRw io.ReadWriter
 	srcRw = conn
@@ -292,20 +341,116 @@ func (s *Server) serveConn(conn net.Conn) {
 		dstRw = tunnel.NewMsgReadWriter(dstRw)
 	}
 
-	tunnel.Tunnel(srcRw, dstRw)
+	tunnel.Tunnel(s.String(), srcRw, dstRw)
 }
+
+// auth writes the password to the destination connection in the case if it's
+// specified. This is only done in client mode.
+func (s *Server) auth(dstRw io.ReadWriter) {
+	if s.password == "" {
+		return
+	}
+
+	_, _ = dstRw.Write([]byte(s.password + "\r\n"))
+}
+
+// checkAuth checks the first bytes sent by the client and looks for the
+// password there. It also implements the active probing protection by detecting
+// HTTP requests and returning a default stub HTTP response if detected.
+func (s *Server) checkAuth(srcConn net.Conn) (ok bool) {
+	if s.password == "" {
+		// No authentication and probing checks.
+		return true
+	}
+
+	// Give up to 60 seconds on the authentication.
+	_ = srcConn.SetReadDeadline(time.Now().Add(authTimeout))
+	defer func() {
+		// Remove the deadline when it's not required any more.
+		_ = srcConn.SetReadDeadline(time.Time{})
+	}()
+
+	r := textproto.NewReader(bufio.NewReader(srcConn))
+
+	line, err := r.ReadLine()
+	if err != nil {
+		log.Debug("Could not read password from the first bytes: %v", err)
+
+		return false
+	}
+
+	if s.password == line {
+		log.Debug("Authentication successful")
+
+		return true
+	}
+
+	log.Debug("Authentication unsuccessful, check if probing detection is required")
+
+	method, rest, ok1 := strings.Cut(line, " ")
+	requestURI, proto, ok2 := strings.Cut(rest, " ")
+	if !ok1 || !ok2 || !strings.HasPrefix(proto, "HTTP/1") {
+		// Not HTTP protocol for sure, existing right away.
+		return false
+	}
+
+	log.Debug("Detected HTTP: %s %s %s", method, requestURI, proto)
+
+	// Mimic to nginx's default 403 Forbidden response.
+	response := fmt.Sprintf("%s 403 Forbidden\r\n", proto) +
+		"Server: nginx\r\n" +
+		fmt.Sprintf("Date: %s\r\n", time.Now().Format(http.TimeFormat)) +
+		"Content-Type: text/html\r\n" +
+		"Connection: close\r\n" +
+		"\r\n" +
+		"<html>\r\n" +
+		"<head><title>403 Forbidden</title></head>\r\n" +
+		"<hr><center>nginx</center>\r\n" +
+		"</body>\r\n" +
+		"</html>\r\n"
+
+	log.Debug("Returned a stub HTTP response")
+
+	// Writing the stub response.
+	_, _ = srcConn.Write([]byte(response))
+
+	return false
+}
+
+// multiReadWriter is a helper object that's used for replacing io.ReadWriter
+// when the server peeked into the connection.
+type multiReadWriter struct {
+	io.Reader
+	io.Writer
+}
+
+// type check
+var _ io.ReadWriter = (*multiReadWriter)(nil)
 
 // dialDst creates a connection to the destination. Depending on the mode the
 // server operates in, it is either a TLS connection or a UDP connection.
 func (s *Server) dialDst() (conn net.Conn, err error) {
 	if s.serverMode {
-		return net.Dial("udp", s.destinationAddr)
+		return s.dialer.Dial("udp", s.destinationAddr)
 	}
 
-	return tls.Dial("tcp", s.destinationAddr, &tls.Config{
+	tcpConn, err := s.dialer.Dial("tcp", s.destinationAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open connection to %s: %w", s.destinationAddr, err)
+	}
+
+	// TODO(ameshkov): Change tls.HelloChrome_120 when updating utls.
+	tlsConn := tls.UClient(tcpConn, &tls.Config{
 		// TODO(ameshkov): Make verification possible.
 		InsecureSkipVerify: true,
-	})
+	}, tls.HelloChrome_120)
+
+	err = tlsConn.Handshake()
+	if err != nil {
+		return nil, fmt.Errorf("cannot establish connection to %s: %w", s.destinationAddr, err)
+	}
+
+	return tlsConn, nil
 }
 
 // isStarted safely checks whether the pipe is started or not.
