@@ -25,6 +25,9 @@ type Listener struct {
 
 	chanAccept chan *udpConn
 	chanClosed chan struct{}
+
+	closed   bool
+	closedMu sync.Mutex
 }
 
 // Listen creates a new *Listener and is supposed to be a function similar
@@ -56,6 +59,10 @@ var _ net.Listener = (*Listener)(nil)
 
 // Accept implements the net.Listener interface for *Listener.
 func (l *Listener) Accept() (conn net.Conn, err error) {
+	if l.isClosed() {
+		return nil, net.ErrClosed
+	}
+
 	select {
 	case conn = <-l.chanAccept:
 		return conn, nil
@@ -66,6 +73,14 @@ func (l *Listener) Accept() (conn net.Conn, err error) {
 
 // Close implements the net.Listener interface for *Listener.
 func (l *Listener) Close() (err error) {
+	if l.isClosed() {
+		return nil
+	}
+
+	l.closedMu.Lock()
+	l.closed = true
+	l.closedMu.Unlock()
+
 	close(l.chanClosed)
 
 	l.natTableMu.Lock()
@@ -82,13 +97,21 @@ func (l *Listener) Addr() (addr net.Addr) {
 	return l.conn.LocalAddr()
 }
 
+// isClosed returns true if the listener is already closed.
+func (l *Listener) isClosed() (ok bool) {
+	l.closedMu.Lock()
+	defer l.closedMu.Unlock()
+
+	return l.closed
+}
+
 // readLoop implements the listener logic, it reads incoming data and passes it
 // to the corresponding udpConn. When a new udpConn is created, it is written
 // to the chanAccept channel.
 func (l *Listener) readLoop() {
 	buf := make([]byte, 65536)
 
-	for {
+	for !l.isClosed() {
 		n, addr, err := l.conn.ReadFromUDP(buf)
 
 		if err != nil || n == 0 {
@@ -214,6 +237,10 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 func (c *udpConn) Close() (err error) {
 	c.closedMu.Lock()
 	defer c.closedMu.Unlock()
+
+	if c.closed {
+		return nil
+	}
 
 	c.closed = true
 	close(c.chanClosed)
