@@ -11,7 +11,14 @@ adheres to [Semantic Versioning][semver].
 
 ## [Unreleased]
 
-[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.0.0...HEAD
+[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.0.1...HEAD
+
+## [1.0.1] - 2024-02-02
+
+* Added a [docker image][dockerregistry].
+
+[dockerregistry]: https://github.com/ameshkov/udptlspipe/pkgs/container/udptlspipe
+[1.0.1]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.0.1
 
 ## [1.0.0] - 2024-02-02
 

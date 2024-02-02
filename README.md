@@ -14,6 +14,7 @@ to keep it that way.
 * [Why would you need it?](#why)
 * [How to install udptlspipe](#install)
 * [How to use udptlspipe](#howtouse)
+* [Docker](#docker)
 * [All command-line arguments](#allcmdarguments)
 
 [dtlspipe]: https://github.com/SenseUnit/dtlspipe
@@ -51,6 +52,7 @@ are:
     go install github.com/ameshkov/udptlspipe@latest
     ```
 * You can get a binary from the [releases page][releases].
+* You can also use a [Docker image](#docker) instead.
 
 [releases]: https://github.com/ameshkov/udptlspipe/releases
 
@@ -100,6 +102,38 @@ need to make some adjustments to the WireGuard client configuration:
   configuration. This [calculator][wireguardcalculator] may help you.
 
 [wireguardcalculator]: https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/
+
+<a id="docker"></a>
+
+## Docker
+
+The docker image [is available][dockerregistry]. `udptlspipe` listens to the
+port `8443` inside the container, so you don't have to specify the listen
+address, other arguments are available.
+
+Tunnel server: run `udptlspipe` as a background service in server mode and
+expose on the host's port `443` (tcp):
+
+```shell
+docker run -d --name udptlspipe -p 443:8443/tcp \
+  ghcr.io/ameshkov/udptlspipe:master \
+  --server \
+  -d 2.3.4.5:8123 \
+  -p SecurePassword
+```
+
+Local machine: run `udptlspipe` as a background service in client mode and
+expose on the host's port `1234` (udp):
+
+```shell
+docker run -d --name udptlspipe -p 1234:8443/udp \
+  ghcr.io/ameshkov/udptlspipe:master \
+  --server \
+  -d 2.3.4.5:8123 \
+  -p SecurePassword
+```
+
+[dockerregistry]: https://github.com/ameshkov/udptlspipe/pkgs/container/udptlspipe
 
 <a id="allcmdarguments"></a>
 
