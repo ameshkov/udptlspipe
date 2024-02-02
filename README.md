@@ -121,3 +121,8 @@ Application Options:
 Help Options:
   -h, --help                                                Show this help message
 ```
+
+## TODO
+
+* [ ] Automatic TLS certs generation (let's encrypt, lego)
+* [ ] Docker image
