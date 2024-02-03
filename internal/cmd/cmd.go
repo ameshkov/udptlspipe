@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	tls "github.com/refraction-networking/utls"
+
 	"github.com/AdguardTeam/golibs/log"
 	"github.com/ameshkov/udptlspipe/internal/pipe"
 	"github.com/ameshkov/udptlspipe/internal/version"
@@ -42,7 +44,36 @@ func Main() {
 		log.SetLevel(log.DEBUG)
 	}
 
-	srv, err := pipe.NewServer(o.ListenAddr, o.DestinationAddr, o.Password, o.ProxyURL, o.ServerMode)
+	log.Info("Configuration:\n%s", o)
+
+	cfg := &pipe.Config{
+		ListenAddr:        o.ListenAddr,
+		DestinationAddr:   o.DestinationAddr,
+		Password:          o.Password,
+		ServerMode:        o.ServerMode,
+		ProxyURL:          o.ProxyURL,
+		VerifyCertificate: o.VerifyCertificate,
+		TLSServerName:     o.TLSServerName,
+	}
+
+	if o.TLSCertPath != "" {
+		if !o.ServerMode {
+			log.Error("TLS certificate only works in server mode")
+
+			os.Exit(1)
+		}
+
+		cert, certErr := loadX509KeyPair(o.TLSCertPath, o.TLSCertKey)
+		if certErr != nil {
+			log.Error("Failed to load TLS certificate: %v", err)
+
+			os.Exit(1)
+		}
+
+		cfg.TLSCertificate = cert
+	}
+
+	srv, err := pipe.NewServer(cfg)
 	if err != nil {
 		log.Error("Failed to initialize server: %v", err)
 
@@ -72,4 +103,30 @@ func Main() {
 	}
 
 	log.Info("Exiting udptlspipe.")
+}
+
+// loadX509KeyPair reads and parses a public/private key pair from a pair of
+// files.  The files must contain PEM encoded data.  The certificate file may
+// contain intermediate certificates following the leaf certificate to form a
+// certificate chain.  On successful return, Certificate.Leaf will be nil
+// because the parsed form of the certificate is not retained.
+func loadX509KeyPair(certFile, keyFile string) (crt *tls.Certificate, err error) {
+	// #nosec G304 -- Trust the file path that is given in the configuration.
+	certPEMBlock, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// #nosec G304 -- Trust the file path that is given in the configuration.
+	keyPEMBlock, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsCert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tlsCert, nil
 }

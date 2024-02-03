@@ -21,7 +21,12 @@ func TestServer_Start_integration(t *testing.T) {
 	defer log.OnCloserError(udpSrv, log.DEBUG)
 
 	// Create the pipe server proxying data to that UDP echo server.
-	pipeServer, err := pipe.NewServer("127.0.0.1:0", udpSrv.Addr(), "123123", "", true)
+	pipeServer, err := pipe.NewServer(&pipe.Config{
+		ListenAddr:      "127.0.0.1:0",
+		DestinationAddr: udpSrv.Addr(),
+		Password:        "123123",
+		ServerMode:      true,
+	})
 	require.NoError(t, err)
 
 	// Start the pipe server, it's ready to accept new connections.
@@ -32,7 +37,11 @@ func TestServer_Start_integration(t *testing.T) {
 	}()
 
 	// Now create the pipe client connected to that server.
-	pipeClient, err := pipe.NewServer("127.0.0.1:0", pipeServer.Addr().String(), "123123", "", false)
+	pipeClient, err := pipe.NewServer(&pipe.Config{
+		ListenAddr:      "127.0.0.1:0",
+		DestinationAddr: pipeServer.Addr().String(),
+		Password:        "123123",
+	})
 	require.NoError(t, err)
 
 	// Start the pipe client, it's ready to accept new connections.

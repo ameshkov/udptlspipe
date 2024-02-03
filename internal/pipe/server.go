@@ -24,6 +24,12 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// defaultSNI is the default server name that will be used in both the client
+// TLS ClientHello and the server's certificate when no TLS configuration is
+// configured.
+const defaultSNI = "example.org"
+
+// authTimeout is the read timeout for the first auth packet.
 const authTimeout = time.Second * 60
 
 // Server represents an udptlspipe pipe. Depending on whether it is created in
@@ -34,6 +40,10 @@ type Server struct {
 	destinationAddr string
 	dialer          proxy.Dialer
 	serverMode      bool
+
+	// tlsConfig to use for TLS connections. In server mode it also has the
+	// certificate that will be used.
+	tlsConfig *tls.Config
 
 	// password is a string that the server will search for in the first bytes.
 	// If not found, the server will return a stub web page.
@@ -62,29 +72,105 @@ type Server struct {
 	wg sync.WaitGroup
 }
 
+// Config represents the server configuration.
+type Config struct {
+	// ListenAddr is the address (ip:port) where the server will be listening
+	// to. Depending on the mode the server uses, it will either listen for TLS
+	// or UDP connections.
+	ListenAddr string
+
+	// DestinationAddr is the address (host:port) to where the server will try
+	// to connect. Depending on the mode the server uses, it will either
+	// connect to a TLS endpoint (the pipe server) or not.
+	DestinationAddr string
+
+	// Password enables authentication of the pipe clients. If set, it also
+	// enables active probing protection.
+	Password string
+
+	// ServerMode controls the way the pipe operates. When it's true, the pipe
+	// server operates in server mode, i.e. it accepts incoming TLS connections
+	// and proxies the data to the destination address over UDP. When it works
+	// in client mode, it is the other way around: accepts UDP traffic and
+	// proxies it to the destination pipe server over TLS.
+	ServerMode bool
+
+	// URL of a proxy server that can be used for proxying traffic to the
+	// destination.
+	ProxyURL string
+
+	// VerifyCertificate enables server certificate verification in client mode.
+	// If enabled, the client will verify the server certificate using the
+	// system root certs store.
+	VerifyCertificate bool
+
+	// TLSServerName configures the server name to send in TLS ClientHello when
+	// operating in client mode and the server name that will be used when
+	// generating a stub certificate. If not set, the default domain name will
+	// be used for these purposes.
+	TLSServerName string
+
+	// TLSCertificate is an optional field that allows to configure the TLS
+	// certificate to use when running in server mode. This option makes sense
+	// only for server mode. If not configured, the server will generate a stub
+	// self-signed certificate automatically.
+	TLSCertificate *tls.Certificate
+}
+
+// createTLSConfig creates a TLS configuration as per the server configuration.
+func createTLSConfig(config *Config) (tlsConfig *tls.Config, err error) {
+	serverName := config.TLSServerName
+	if serverName == "" {
+		log.Info("TLS server name is not configured, using %s by default", defaultSNI)
+		serverName = defaultSNI
+	}
+
+	if config.ServerMode {
+		tlsCert := config.TLSCertificate
+		if tlsCert == nil {
+			log.Info("Generating a stub certificate for %s", serverName)
+			tlsCert, err = createStubCertificate(serverName)
+		} else {
+			log.Info("Using the supplied TLS certificate")
+		}
+
+		tlsConfig = &tls.Config{
+			ServerName:   serverName,
+			Certificates: []tls.Certificate{*tlsCert},
+			MinVersion:   tls.VersionTLS12,
+		}
+	} else {
+		tlsConfig = &tls.Config{
+			InsecureSkipVerify: !config.VerifyCertificate,
+			ServerName:         serverName,
+		}
+	}
+
+	return tlsConfig, nil
+}
+
 // NewServer creates a new instance of a *Server.
-func NewServer(
-	listenAddr string,
-	destinationAddr string,
-	password string,
-	proxyURL string,
-	serverMode bool,
-) (s *Server, err error) {
+func NewServer(config *Config) (s *Server, err error) {
 	s = &Server{
-		listenAddr:      listenAddr,
-		destinationAddr: destinationAddr,
-		password:        password,
+		listenAddr:      config.ListenAddr,
+		destinationAddr: config.DestinationAddr,
+		password:        config.Password,
 		dialer:          proxy.Direct,
-		serverMode:      serverMode,
+		serverMode:      config.ServerMode,
 		srcConns:        map[net.Conn]struct{}{},
 		srcConnsMu:      &sync.Mutex{},
 		dstConns:        map[net.Conn]struct{}{},
 		dstConnsMu:      &sync.Mutex{},
 	}
 
-	if proxyURL != "" {
+	s.tlsConfig, err = createTLSConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare TLS configuration: %w", err)
+	}
+
+	if config.ProxyURL != "" {
 		var u *url.URL
-		u, err = url.Parse(proxyURL)
+		u, err = url.Parse(config.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("invalid proxy URL: %w", err)
 		}
@@ -137,11 +223,7 @@ func (s *Server) Start() (err error) {
 // client mode.
 func (s *Server) createListener() (l net.Listener, err error) {
 	if s.serverMode {
-		// Using a self-signed TLS certificate issued for example.org as the client
-		// will not verify the certificate anyways.
-		// TODO(ameshkov): Allow configuring the certificate.
-		tlsConfig := createServerTLSConfig("example.org")
-		l, err = tls.Listen("tcp", s.listenAddr, tlsConfig)
+		l, err = tls.Listen("tcp", s.listenAddr, s.tlsConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -420,7 +502,7 @@ func (s *Server) checkAuth(srcConn net.Conn) (ok bool, rw io.ReadWriter) {
 
 	log.Debug("Detected HTTP: %s %s %s", method, requestURI, proto)
 
-	// Mimic to nginx's default 403 Forbidden response.
+	// Mimic nginx default 403 Forbidden response.
 	response := fmt.Sprintf("%s 403 Forbidden\r\n", proto) +
 		"Server: nginx\r\n" +
 		fmt.Sprintf("Date: %s\r\n", time.Now().Format(http.TimeFormat)) +
@@ -463,11 +545,7 @@ func (s *Server) dialDst() (conn net.Conn, err error) {
 		return nil, fmt.Errorf("failed to open connection to %s: %w", s.destinationAddr, err)
 	}
 
-	// TODO(ameshkov): Change tls.HelloChrome_120 when updating utls.
-	tlsConn := tls.UClient(tcpConn, &tls.Config{
-		// TODO(ameshkov): Make verification possible.
-		InsecureSkipVerify: true,
-	}, tls.HelloChrome_120)
+	tlsConn := tls.UClient(tcpConn, s.tlsConfig, tls.HelloChrome_Auto)
 
 	err = tlsConn.Handshake()
 	if err != nil {

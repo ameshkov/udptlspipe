@@ -11,13 +11,23 @@ adheres to [Semantic Versioning][semver].
 
 ## [Unreleased]
 
-[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.0.1...HEAD
+[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.1.0...HEAD
+
+## [1.1.0] - 2024-02-03
+
+* Added an option to configure custom TLS certificate. Check out
+  [README][readmetlscert] for more information on how to use that.
+
+[1.1.0]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.1.0
+
+[readmetlscert]: https://github.com/ameshkov/udptlspipe?tab=readme-ov-file#tlscert
 
 ## [1.0.1] - 2024-02-02
 
 * Added a [docker image][dockerregistry].
 
 [dockerregistry]: https://github.com/ameshkov/udptlspipe/pkgs/container/udptlspipe
+
 [1.0.1]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.0.1
 
 ## [1.0.0] - 2024-02-02

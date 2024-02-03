@@ -7,25 +7,24 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"fmt"
 	"math/big"
 	"time"
 
 	tls "github.com/refraction-networking/utls"
 )
 
-// createServerTLSConfig creates a TLS pipe configuration with the specified
-// pipe name. It returns a *tls.Config that will be used by the pipe.
-func createServerTLSConfig(tlsServerName string) (tlsConfig *tls.Config) {
+// createStubCertificate creates a stub TLS certificate for the pipe server.
+// This stub cert is generated when the user does not specify any certificate.
+func createStubCertificate(tlsServerName string) (cert *tls.Certificate, err error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic(fmt.Sprintf("cannot generate RSA key: %v", err))
+		return nil, err
 	}
 
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		panic(fmt.Sprintf("failed to generate serial number: %v", err))
+		return nil, err
 	}
 
 	notBefore := time.Now()
@@ -48,28 +47,18 @@ func createServerTLSConfig(tlsServerName string) (tlsConfig *tls.Config) {
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey(privateKey), privateKey)
 	if err != nil {
-		panic(fmt.Sprintf("failed to create certificate: %v", err))
+		return nil, err
 	}
 
 	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 	keyPem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
 
-	cert, err := tls.X509KeyPair(certPem, keyPem)
+	tlsCert, err := tls.X509KeyPair(certPem, keyPem)
 	if err != nil {
-		panic(fmt.Sprintf("failed to create certificate: %v", err))
+		return nil, err
 	}
 
-	roots := x509.NewCertPool()
-	roots.AppendCertsFromPEM(certPem)
-
-	tlsConfig = &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName:   tlsServerName,
-		RootCAs:      roots,
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	return tlsConfig
+	return &tlsCert, nil
 }
 
 func publicKey(priv any) (pub any) {

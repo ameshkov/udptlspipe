@@ -14,6 +14,7 @@ to keep it that way.
 * [Why would you need it?](#why)
 * [How to install udptlspipe](#install)
 * [How to use udptlspipe](#howtouse)
+* [Custom TLS certificate](#tlscert)
 * [Docker](#docker)
 * [All command-line arguments](#allcmdarguments)
 
@@ -103,6 +104,58 @@ need to make some adjustments to the WireGuard client configuration:
 
 [wireguardcalculator]: https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/
 
+<a id="tlscert"></a>
+
+## Custom TLS certificate
+
+By default, `udptlspipe` generates a self-signed certificate every time you run
+a server, and the client does not verify the server certificate. This is an
+okay-ish solution for a simple case when the authentication is handled by the
+downstream UDP server, but it's not ideal when you want to completely secure
+your tunnel. In order to achieve that goal, there is an option to use a custom
+TLS certificate on the server-side and to enable certificates verification by
+the client.
+
+The first step would be to obtain a valid TLS certificate. You will probably
+need to have a domain name to generate a valid TLS certificate. There are
+numerous ways to do that, I suggest using a tool like [lego][lego] to automate
+this process.
+
+Here is how to run the server with a custom TLS certificate.
+
+```shell
+udptlspipe --server \
+  -l 0.0.0.0:443 \
+  -d 2.3.4.5:8123 \
+  -p SecurePassword \
+  --tls-servername yourdomain.com \
+  --tls-certfile /path/to/cert \
+  --tls-keyfile /path/to/key
+
+```
+
+* `--tls-servername` is the server name (should be the same as in your
+  certificate).
+* `--tls-certfile` is a path to the file with your PEM-encoded certificate.
+* `--tls-keyfile` is a path to the file with your PEM-encoded private key.
+
+Now let's run the client so that it could verify the certificate:
+
+```shell
+udptlspipe \
+  -l 127.0.0.1:8123 \
+  -d 1.2.3.4:443 \
+  -p SecurePassword \
+  --secure \
+  --tls-servername yourdomain.com
+
+```
+
+* `--secure` enables TLS certificate verification.
+* `--tls-servername` is the server name of the server cert.
+
+[lego]: https://go-acme.github.io/lego/usage/cli/obtain-a-certificate/
+
 <a id="docker"></a>
 
 ## Docker
@@ -143,12 +196,26 @@ Usage:
   udptlspipe [OPTIONS]
 
 Application Options:
-  -s, --server                                              Enables the server mode. By default it runs in client mode.
+  -s, --server                                              Enables the server mode (optional). By default it runs
+                                                            in client mode.
   -l, --listen=<IP:Port>                                    Address the tool will be listening to (required).
   -d, --destination=<IP:Port>                               Address the tool will connect to (required).
-  -p, --password=<password>                                 Password is used to detect if the client is allowed.
-  -x, --proxy=[protocol://username:password@]host[:port]    URL of a proxy to use when connecting to the destination address
+  -p, --password=<password>                                 Password is used to detect if the client is allowed
                                                             (optional).
+  -x, --proxy=[protocol://username:password@]host[:port]    URL of a proxy to use when connecting to the
+                                                            destination address (optional).
+      --secure                                              Enables server TLS certificate verification in client
+                                                            mode (optional).
+      --tls-servername=<hostname>                           Configures TLS server name that will be sent in the TLS
+                                                            ClientHello in client mode, and the stub certificate
+                                                            name in server mode. If not set, the the default domain
+                                                            name (example.org) will be used (optional).
+      --tls-certfile=<path-to-cert-file>                    Path to the TLS certificate file. Allows to use a
+                                                            custom certificate in server mode. If not set, the
+                                                            server will generate a self-signed stub certificate
+                                                            (optional).
+      --tls-keyfile=<path-to-key-file>                      Path to the private key for the cert specified in
+                                                            tls-certfile.
   -v, --verbose                                             Verbose output (optional).
 
 Help Options:
@@ -157,5 +224,7 @@ Help Options:
 
 ## TODO
 
-* [ ] Automatic TLS certs generation (let's encrypt, lego)
-* [ ] Docker image
+* [X] Docker image.
+* [X] Certificate configuration.
+* [ ] Use WebSocket for transport instead of the custom binary proto.
+* [ ] Automatic TLS certs generation (let's encrypt, lego).
