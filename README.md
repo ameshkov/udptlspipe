@@ -116,7 +116,7 @@ expose on the host's port `443` (tcp):
 
 ```shell
 docker run -d --name udptlspipe -p 443:8443/tcp \
-  ghcr.io/ameshkov/udptlspipe:master \
+  ghcr.io/ameshkov/udptlspipe \
   --server \
   -d 2.3.4.5:8123 \
   -p SecurePassword
@@ -127,8 +127,7 @@ expose on the host's port `1234` (udp):
 
 ```shell
 docker run -d --name udptlspipe -p 1234:8443/udp \
-  ghcr.io/ameshkov/udptlspipe:master \
-  --server \
+  ghcr.io/ameshkov/udptlspipe \
   -d 2.3.4.5:8123 \
   -p SecurePassword
 ```
