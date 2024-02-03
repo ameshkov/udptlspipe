@@ -15,12 +15,21 @@ COPY . .
 # name.
 RUN VERSION=${VERSION} make build
 
-# Step 2: Use a Docker multi-stage build to create a lean production image.
+# Step 2: Use a builder image to get the latest certificates.
+FROM alpine:latest as certs
+
+# Download the latest CA certificates
+RUN apk --update add ca-certificates
+
+# Step 3: Use a Docker multi-stage build to create a lean production image.
 # Start from a scratch (empty) image to keep the image size small.
 FROM scratch
 
 # Copy the binary from the builder stage to the production image.
 COPY --from=builder /app/udptlspipe /
+
+# Copy the CA certificates from the certs image.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Exact protocol depends on operation mode: tcp for server and udp for client.
 EXPOSE 8443/tcp
