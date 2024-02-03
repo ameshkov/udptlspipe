@@ -130,6 +130,9 @@ func createTLSConfig(config *Config) (tlsConfig *tls.Config, err error) {
 		if tlsCert == nil {
 			log.Info("Generating a stub certificate for %s", serverName)
 			tlsCert, err = createStubCertificate(serverName)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate a stub certificate: %w", err)
+			}
 		} else {
 			log.Info("Using the supplied TLS certificate")
 		}
