@@ -60,15 +60,6 @@ func (rw *MsgReadWriter) Read(b []byte) (n int, err error) {
 
 // Write implements the io.ReadWriter interface for *MsgReadWriter.
 func (rw *MsgReadWriter) Write(b []byte) (n int, err error) {
-	if len(b) > MaxMessageLength {
-		// Warn the user that this may not work correctly.
-		log.Error(
-			"Warning: trying to write a message of length %d larger than %d, considering reducing the MTU",
-			len(b),
-			MaxMessageLength,
-		)
-	}
-
 	// Create random padding to make it harder to understand what's inside
 	// the tunnel.
 	minLength := MinMessageLength - len(b)
