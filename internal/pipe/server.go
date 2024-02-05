@@ -545,6 +545,8 @@ func (s *Server) processConn(rwc io.ReadWriteCloser) {
 		dstRwc, err = s.upgradeClientConn(dstConn)
 		if err != nil {
 			log.Error("failed to upgrade: %v", err)
+
+			return
 		}
 	}
 
