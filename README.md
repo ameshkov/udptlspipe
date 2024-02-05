@@ -218,26 +218,24 @@ Usage:
   udptlspipe [OPTIONS]
 
 Application Options:
-  -s, --server                                              Enables the server mode (optional). By default it runs
-                                                            in client mode.
+  -s, --server                                              Enables the server mode (optional). By default it runs in client
+                                                            mode.
   -l, --listen=<IP:Port>                                    Address the tool will be listening to (required).
   -d, --destination=<IP:Port>                               Address the tool will connect to (required).
-  -p, --password=<password>                                 Password is used to detect if the client is allowed
+  -p, --password=<password>                                 Password is used to detect if the client is allowed (optional).
+  -x, --proxy=[protocol://username:password@]host[:port]    URL of a proxy to use when connecting to the destination address
                                                             (optional).
-  -x, --proxy=[protocol://username:password@]host[:port]    URL of a proxy to use when connecting to the
-                                                            destination address (optional).
-      --secure                                              Enables server TLS certificate verification in client
-                                                            mode (optional).
+      --secure                                              Enables server TLS certificate verification in client mode
+                                                            (optional).
       --tls-servername=<hostname>                           Configures TLS server name that will be sent in the TLS
-                                                            ClientHello in client mode, and the stub certificate
-                                                            name in server mode. If not set, the the default domain
-                                                            name (example.org) will be used (optional).
-      --tls-certfile=<path-to-cert-file>                    Path to the TLS certificate file. Allows to use a
-                                                            custom certificate in server mode. If not set, the
-                                                            server will generate a self-signed stub certificate
-                                                            (optional).
-      --tls-keyfile=<path-to-key-file>                      Path to the private key for the cert specified in
-                                                            tls-certfile.
+                                                            ClientHello in client mode, and the stub certificate name in
+                                                            server mode. If not set, the the default domain name
+                                                            (example.org) will be used (optional).
+      --tls-certfile=<path-to-cert-file>                    Path to the TLS certificate file. Allows to use a custom
+                                                            certificate in server mode. If not set, the server will generate
+                                                            a self-signed stub certificate (optional).
+      --tls-keyfile=<path-to-key-file>                      Path to the private key for the cert specified in tls-certfile.
+      --probe-reverseproxyurl=<hostname>                    Unauthorized requests and probes will be proxied to the URL.
   -v, --verbose                                             Verbose output (optional).
 
 Help Options:
