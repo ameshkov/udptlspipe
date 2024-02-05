@@ -20,6 +20,7 @@ import (
 	"github.com/AdguardTeam/golibs/log"
 	"github.com/ameshkov/udptlspipe/internal/tunnel"
 	"github.com/ameshkov/udptlspipe/internal/udp"
+	"github.com/gobwas/ws"
 	tls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
 )
@@ -29,8 +30,8 @@ import (
 // configured.
 const defaultSNI = "example.org"
 
-// authTimeout is the read timeout for the first auth packet.
-const authTimeout = time.Second * 60
+// upgradeTimeout is the read timeout for the first auth packet.
+const upgradeTimeout = time.Second * 60
 
 // Server represents an udptlspipe pipe. Depending on whether it is created in
 // server- or client- mode, it listens to TLS or UDP connections and pipes the
@@ -376,17 +377,153 @@ func (s *Server) closeDstConn(conn net.Conn) {
 	delete(s.dstConns, conn)
 }
 
-// serveConn processes incoming connections, opens the connection to the
-// destination and tunnels data between both connections.
-func (s *Server) serveConn(conn net.Conn) {
-	var dstConn net.Conn
+// readWriteCloser is a helper object that's used for replacing
+// io.ReadWriteCloser when the server peeked into the connection.
+type readWriteCloser struct {
+	io.Reader
+	io.Writer
+	io.Closer
+}
 
+// upgradeClientConn
+func (s *Server) upgradeClientConn(conn net.Conn) (rwc io.ReadWriteCloser, err error) {
+	log.Debug("Upgrading connection to %s", conn.RemoteAddr())
+
+	// Give up to 60 seconds on the upgrade and authentication.
+	_ = conn.SetReadDeadline(time.Now().Add(upgradeTimeout))
+	defer func() {
+		// Remove the deadline when it's not required any more.
+		_ = conn.SetReadDeadline(time.Time{})
+	}()
+
+	u, err := url.Parse(fmt.Sprintf("wss://%s/?password=%s", s.tlsConfig.ServerName, s.password))
+	if err != nil {
+		return nil, err
+	}
+
+	var br *bufio.Reader
+	br, _, err = ws.DefaultDialer.Upgrade(conn, u)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upgrade: %w", err)
+	}
+
+	if br != nil && br.Buffered() > 0 {
+		// If Upgrade returned a non-empty reader, then probably the server
+		// immediately sent some data. This is not the expected behavior so
+		// raise an error here.
+		return nil, fmt.Errorf("received initial data len=%d from the server", br.Buffered())
+	}
+
+	return newWsConn(
+		&readWriteCloser{
+			Reader: conn,
+			Writer: conn,
+			Closer: conn,
+		},
+		conn.RemoteAddr(),
+		ws.StateClientSide,
+	), nil
+}
+
+// respondWithDummyPage writes a dummy response to the client (part of active
+// probing protection).
+func (s *Server) respondWithDummyPage(conn net.Conn, req *http.Request) {
+	response := fmt.Sprintf("%s 403 Forbidden\r\n", req.Proto) +
+		"Server: nginx\r\n" +
+		fmt.Sprintf("Date: %s\r\n", time.Now().Format(http.TimeFormat)) +
+		"Content-Type: text/html\r\n" +
+		"Connection: close\r\n" +
+		"\r\n" +
+		"<html>\r\n" +
+		"<head><title>403 Forbidden</title></head>\r\n" +
+		"<center><h1>403 Forbidden</h1></center>\r\n" +
+		"<hr><center>nginx</center>\r\n" +
+		"</body>\r\n" +
+		"</html>\r\n"
+
+	_, _ = conn.Write([]byte(response))
+}
+
+// upgradeServerConn attempts to upgrade the server connection and returns a
+// rwc that wraps the original connection and can be used for tunneling data.
+func (s *Server) upgradeServerConn(conn net.Conn) (rwc io.ReadWriteCloser, err error) {
+	log.Debug("Upgrading connection from %s", conn.RemoteAddr())
+
+	// Give up to 60 seconds on the upgrade and authentication.
+	_ = conn.SetReadDeadline(time.Now().Add(upgradeTimeout))
+	defer func() {
+		// Remove the deadline when it's not required any more.
+		_ = conn.SetReadDeadline(time.Time{})
+	}()
+
+	// bufio.Reader may read more than requested, so it's crucial to use
+	// TeeReader so that we could restore the bytes that has been read.
+	var buf bytes.Buffer
+	r := bufio.NewReader(io.TeeReader(conn, &buf))
+
+	req, err := http.ReadRequest(r)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read HTTP request: %w", err)
+	}
+
+	if !strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
+		s.respondWithDummyPage(conn, req)
+
+		return nil, fmt.Errorf("not a websocket")
+	}
+
+	clientPassword := req.URL.Query().Get("password")
+	if s.password != "" && clientPassword != s.password {
+		s.respondWithDummyPage(conn, req)
+
+		return nil, fmt.Errorf("wrong password: %s", clientPassword)
+	}
+
+	// Now that authentication check has been done restore the peeked up data
+	// and use ws.Upgrade to do the actual WebSocket upgrade.
+	multiRwc := &readWriteCloser{
+		Reader: io.MultiReader(bytes.NewReader(buf.Bytes()), conn),
+		Writer: conn,
+		Closer: conn,
+	}
+
+	_, err = ws.Upgrade(multiRwc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upgrade WebSocket: %w", err)
+	}
+
+	return newWsConn(multiRwc, conn.RemoteAddr(), ws.StateServerSide), nil
+}
+
+// serveConn processes incoming connection, authenticates it and proxies the
+// data from it to the destination address.
+func (s *Server) serveConn(conn net.Conn) {
 	defer func() {
 		s.wg.Done()
 
 		s.closeSrcConn(conn)
-		s.closeDstConn(dstConn)
 	}()
+
+	var rwc io.ReadWriteCloser = conn
+
+	if s.serverMode {
+		var err error
+		rwc, err = s.upgradeServerConn(conn)
+		if err != nil {
+			log.Error("failed to accept server conn: %v", err)
+
+			return
+		}
+	}
+
+	s.processConn(rwc)
+}
+
+// processConn processes the prepared server connection that is passed as rwc.
+func (s *Server) processConn(rwc io.ReadWriteCloser) {
+	var dstConn net.Conn
+
+	defer s.closeDstConn(dstConn)
 
 	dstConn, err := s.dialDst()
 	if err != nil {
@@ -403,26 +540,18 @@ func (s *Server) serveConn(conn net.Conn) {
 		s.dstConns[dstConn] = struct{}{}
 	}()
 
-	var srcRw, dstRw io.ReadWriter
-	srcRw = conn
-	dstRw = dstConn
-
-	if s.serverMode {
-		ok, newRw := s.checkAuth(conn)
-		if !ok {
-			// Client connection has not been authorized, closing the connection.
-			return
-		}
-
-		// Replace the source reader since some bytes in the original srcRw
-		// may have been read as a part of authentication process.
-		srcRw = newRw
-	}
-
+	var dstRwc io.ReadWriteCloser = dstConn
 	if !s.serverMode {
-		// Authorize the client if necessary.
-		s.auth(dstConn)
+		dstRwc, err = s.upgradeClientConn(dstConn)
+		if err != nil {
+			log.Error("failed to upgrade: %v", err)
+		}
 	}
+
+	// Prepare ReadWriter objects for tunneling.
+	var srcRw, dstRw io.ReadWriter
+	srcRw = rwc
+	dstRw = dstRwc
 
 	// When the client communicates with the server it uses encoded messages so
 	// connection between them needs to be wrapped. In server mode it is the
@@ -436,106 +565,6 @@ func (s *Server) serveConn(conn net.Conn) {
 	tunnel.Tunnel(s.String(), srcRw, dstRw)
 }
 
-// auth writes the password to the destination connection in the case if it's
-// specified. This is only done in client mode.
-func (s *Server) auth(dstRw io.ReadWriter) {
-	if s.password == "" {
-		return
-	}
-
-	_, _ = dstRw.Write([]byte(s.password + "\r\n"))
-}
-
-// checkAuth checks the first bytes sent by the client and looks for the
-// password there. It also implements the active probing protection by detecting
-// HTTP requests and returning a default stub HTTP response if detected.
-// The function returns an io.ReadWriter that should be used further to work
-// with this connection.
-func (s *Server) checkAuth(srcConn net.Conn) (ok bool, rw io.ReadWriter) {
-	if s.password == "" {
-		// No authentication and probing checks.
-		return true, srcConn
-	}
-
-	// Give up to 60 seconds on the authentication.
-	_ = srcConn.SetReadDeadline(time.Now().Add(authTimeout))
-	defer func() {
-		// Remove the deadline when it's not required any more.
-		_ = srcConn.SetReadDeadline(time.Time{})
-	}()
-
-	// bufio.Reader may read more than requested, so it's crucial to use
-	// TeeReader so that we could restore the bytes that has been read.
-	var buf bytes.Buffer
-	r := bufio.NewReader(io.TeeReader(srcConn, &buf))
-
-	lineBytes, err := r.ReadBytes('\n')
-	if err != nil {
-		log.Debug("Could not read password from the first bytes: %v", err)
-
-		return false, srcConn
-	}
-	line := strings.TrimSpace(string(lineBytes))
-
-	if s.password == line {
-		log.Debug("Authentication successful")
-
-		// Skip the line that contains the password, we don't need it anymore.
-		_, _ = buf.ReadBytes('\n')
-
-		// Now that authentication has been successful, return a new
-		// io.ReadWriter that restores the first bytes save for the password
-		// bytes.
-		rw = &multiReadWriter{
-			Reader: io.MultiReader(bytes.NewReader(buf.Bytes()), srcConn),
-			Writer: srcConn,
-		}
-
-		return true, rw
-	}
-
-	log.Debug("Authentication unsuccessful, check if probing detection is required")
-
-	method, rest, ok1 := strings.Cut(line, " ")
-	requestURI, proto, ok2 := strings.Cut(rest, " ")
-	if !ok1 || !ok2 || !strings.HasPrefix(proto, "HTTP/1") {
-		// Not HTTP protocol for sure, existing right away.
-		return false, srcConn
-	}
-
-	log.Debug("Detected HTTP: %s %s %s", method, requestURI, proto)
-
-	// Mimic nginx default 403 Forbidden response.
-	response := fmt.Sprintf("%s 403 Forbidden\r\n", proto) +
-		"Server: nginx\r\n" +
-		fmt.Sprintf("Date: %s\r\n", time.Now().Format(http.TimeFormat)) +
-		"Content-Type: text/html\r\n" +
-		"Connection: close\r\n" +
-		"\r\n" +
-		"<html>\r\n" +
-		"<head><title>403 Forbidden</title></head>\r\n" +
-		"<hr><center>nginx</center>\r\n" +
-		"</body>\r\n" +
-		"</html>\r\n"
-
-	log.Debug("Returned a stub HTTP response")
-
-	// Writing the stub response.
-	_, _ = srcConn.Write([]byte(response))
-
-	return false, srcConn
-}
-
-// multiReadWriter is a helper object that's used for replacing io.ReadWriter
-// when the server peeked into the connection.
-type multiReadWriter struct {
-	io.Reader
-	io.Writer
-}
-
-// type check
-var _ io.ReadWriter = (*multiReadWriter)(nil)
-
 // dialDst creates a connection to the destination. Depending on the mode the
 // server operates in, it is either a TLS connection or a UDP connection.
 func (s *Server) dialDst() (conn net.Conn, err error) {
@@ -548,7 +577,7 @@ func (s *Server) dialDst() (conn net.Conn, err error) {
 		return nil, fmt.Errorf("failed to open connection to %s: %w", s.destinationAddr, err)
 	}
 
-	tlsConn := tls.UClient(tcpConn, s.tlsConfig, tls.HelloChrome_Auto)
+	tlsConn := tls.UClient(tcpConn, s.tlsConfig, tls.HelloAndroid_11_OkHttp)
 
 	err = tlsConn.Handshake()
 	if err != nil {

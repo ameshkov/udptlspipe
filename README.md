@@ -26,9 +26,13 @@ to keep it that way.
 
 * Cross-platform (Windows/macOS/Linux/Android/*BSD).
 * Simple configuration, no complicated configuration files.
-* Mimics Google Chrome's TLS ClientHello.
+* Mimics Android's okhttp library.
 * Active probing protection in server mode.
 * Suitable to wrap WireGuard, OpenVPN, and other UDP session.
+* Uses WebSocket for data transfer so can be behind
+  [a CDN that supports WS][cdnwebsocket].
+
+[cdnwebsocket]: https://www.cdnplanet.com/guides/websockets/
 
 <a id="why"></a>
 
@@ -226,5 +230,6 @@ Help Options:
 
 * [X] Docker image.
 * [X] Certificate configuration.
-* [ ] Use WebSocket for transport instead of the custom binary proto.
+* [X] Use WebSocket for transport instead of the custom binary proto.
+* [ ] Use several upstream connections instead of a single one.
 * [ ] Automatic TLS certs generation (let's encrypt, lego).

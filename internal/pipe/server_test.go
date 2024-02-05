@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/AdguardTeam/golibs/log"
@@ -55,8 +56,8 @@ func TestServer_Start_integration(t *testing.T) {
 	pipeConn, err := net.Dial("udp", pipeClient.Addr().String())
 	require.NoError(t, err)
 
-	for i := 0; i < 10; i++ {
-		strMsg := fmt.Sprintf("test message %d", i)
+	for i := 0; i < 1000; i++ {
+		strMsg := fmt.Sprintf("test message %d: %s", i, strings.Repeat("a", i))
 		msg := []byte(strMsg)
 
 		// Write a message to the pipe.

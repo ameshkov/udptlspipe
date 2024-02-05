@@ -17,6 +17,10 @@ const MaxMessageLength = 1280
 // will be padded with random bytes.
 const MinMessageLength = 100
 
+// MaxPaddingLength is the maximum size of a random padding that's added to
+// every message.
+const MaxPaddingLength = 256
+
 // MsgReadWriter is a wrapper over io.ReadWriter that encodes messages written
 // to and read from the base writer.
 type MsgReadWriter struct {
@@ -71,7 +75,7 @@ func (rw *MsgReadWriter) Write(b []byte) (n int, err error) {
 	if minLength <= 0 {
 		minLength = 1
 	}
-	maxLength := 256
+	maxLength := MaxPaddingLength
 	if maxLength <= minLength {
 		maxLength = minLength + 1
 	}

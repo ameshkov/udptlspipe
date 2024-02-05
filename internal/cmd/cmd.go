@@ -10,12 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	tls "github.com/refraction-networking/utls"
-
 	"github.com/AdguardTeam/golibs/log"
 	"github.com/ameshkov/udptlspipe/internal/pipe"
 	"github.com/ameshkov/udptlspipe/internal/version"
 	goFlags "github.com/jessevdk/go-flags"
+	tls "github.com/refraction-networking/utls"
 )
 
 // Main is the entry point for the command-line tool.

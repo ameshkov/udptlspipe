@@ -11,7 +11,15 @@ adheres to [Semantic Versioning][semver].
 
 ## [Unreleased]
 
-[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.1.0...HEAD
+[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.2.0...HEAD
+
+## [1.2.0] - 2024-02-05
+
+* Changed the protocol for messages exchange, it now uses WebSocket internally.
+  This change allows running `udptlspipe` server behind a CDN if that CDN
+  supports WebSocket.
+
+[1.2.0]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.2.0
 
 ## [1.1.0] - 2024-02-03
 
