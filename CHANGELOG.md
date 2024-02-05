@@ -13,6 +13,13 @@ adheres to [Semantic Versioning][semver].
 
 [unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.2.1...HEAD
 
+## [1.2.2] - 2024-02-05
+
+* Removed unnecessary message length warnings on writes to the pipe, only kept
+  it for reads.
+
+[1.2.2]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.2.2
+
 ## [1.2.1] - 2024-02-05
 
 * Fixed a panic when the client cannot authorize the connection.
