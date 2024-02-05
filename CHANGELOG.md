@@ -11,7 +11,13 @@ adheres to [Semantic Versioning][semver].
 
 ## [Unreleased]
 
-[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.2.0...HEAD
+[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.2.1...HEAD
+
+## [1.2.1] - 2024-02-05
+
+* Fixed a panic when the client cannot authorize the connection.
+
+[1.2.1]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.2.1
 
 ## [1.2.0] - 2024-02-05
 
