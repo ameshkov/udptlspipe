@@ -24,7 +24,7 @@ func (s *UDPEchoServer) ReceivedMsg(num int) (b []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.received) < num {
+	if len(s.received) <= num {
 		return nil
 	}
 
@@ -96,10 +96,11 @@ func (s *UDPEchoServer) serveConn(conn net.Conn) {
 
 		msg := make([]byte, n)
 		copy(msg, buf[:n])
-		_, _ = conn.Write(msg)
 
 		s.mu.Lock()
 		s.received = append(s.received, msg)
 		s.mu.Unlock()
+
+		_, _ = conn.Write(msg)
 	}
 }
