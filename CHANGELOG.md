@@ -13,9 +13,16 @@ adheres to [Semantic Versioning][semver].
 
 [unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.3.0...HEAD
 
+## [1.3.1] - 2024-02-06
+
+* Added multi-platform Docker image.
+
+[1.3.1]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.3.1
+
 ## [1.3.0] - 2024-02-05
 
-* Added an option to configure a probe reverse proxy URL.
+* Added an option to configure URL of the website, that will be "reverse
+  proxied" in response to unauthorized and probe requests.
 
 [1.3.0]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.3.0
 
