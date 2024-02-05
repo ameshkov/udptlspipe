@@ -11,7 +11,13 @@ adheres to [Semantic Versioning][semver].
 
 ## [Unreleased]
 
-[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.2.1...HEAD
+[unreleased]: https://github.com/ameshkov/udptlspipe/compare/v1.3.0...HEAD
+
+## [1.3.0] - 2024-02-05
+
+* Added an option to configure a probe reverse proxy URL.
+
+[1.3.0]: https://github.com/ameshkov/udptlspipe/releases/tag/v1.3.0
 
 ## [1.2.2] - 2024-02-05
 

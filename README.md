@@ -15,6 +15,7 @@ to keep it that way.
 * [How to install udptlspipe](#install)
 * [How to use udptlspipe](#howtouse)
 * [Custom TLS certificate](#tlscert)
+* [Probing protection](#probing)
 * [Docker](#docker)
 * [All command-line arguments](#allcmdarguments)
 
@@ -159,6 +160,23 @@ udptlspipe \
 * `--tls-servername` is the server name of the server cert.
 
 [lego]: https://go-acme.github.io/lego/usage/cli/obtain-a-certificate/
+
+## Probing protection
+
+By default `udptlspipe` responds with a generic `403 Forbidden` response to
+unauthorized requests. However, it allows to use a more sophisticated
+protection. If `--probe-reverseproxyurl` is specified, `udptlspipe` server will
+proxy unauthorized requests to the specified target while rewriting `Host` and
+keeping the original path. This way you can imitate a real existing website.
+
+```shell
+udptlspipe --server \
+  -l 0.0.0.0:443 \
+  -d 2.3.4.5:8123 \
+  -p SecurePassword \
+  --probe-reverseproxyurl "http://example.com"
+
+```
 
 <a id="docker"></a>
 

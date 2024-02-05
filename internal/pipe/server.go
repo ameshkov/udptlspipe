@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"strings"
@@ -41,6 +42,9 @@ type Server struct {
 	destinationAddr string
 	dialer          proxy.Dialer
 	serverMode      bool
+
+	probeReverseProxyURL    string
+	probeReverseProxyListen net.Listener
 
 	// tlsConfig to use for TLS connections. In server mode it also has the
 	// certificate that will be used.
@@ -116,6 +120,11 @@ type Config struct {
 	// only for server mode. If not configured, the server will generate a stub
 	// self-signed certificate automatically.
 	TLSCertificate *tls.Certificate
+
+	// ProbeReverseProxyURL is the URL that will be used by the reverse HTTP
+	// proxy to respond to unauthorized or proxy requests. If not specified,
+	// it will respond with a stub page 403 Forbidden.
+	ProbeReverseProxyURL string
 }
 
 // createTLSConfig creates a TLS configuration as per the server configuration.
@@ -156,15 +165,16 @@ func createTLSConfig(config *Config) (tlsConfig *tls.Config, err error) {
 // NewServer creates a new instance of a *Server.
 func NewServer(config *Config) (s *Server, err error) {
 	s = &Server{
-		listenAddr:      config.ListenAddr,
-		destinationAddr: config.DestinationAddr,
-		password:        config.Password,
-		dialer:          proxy.Direct,
-		serverMode:      config.ServerMode,
-		srcConns:        map[net.Conn]struct{}{},
-		srcConnsMu:      &sync.Mutex{},
-		dstConns:        map[net.Conn]struct{}{},
-		dstConnsMu:      &sync.Mutex{},
+		listenAddr:           config.ListenAddr,
+		destinationAddr:      config.DestinationAddr,
+		password:             config.Password,
+		probeReverseProxyURL: config.ProbeReverseProxyURL,
+		dialer:               proxy.Direct,
+		serverMode:           config.ServerMode,
+		srcConns:             map[net.Conn]struct{}{},
+		srcConnsMu:           &sync.Mutex{},
+		dstConns:             map[net.Conn]struct{}{},
+		dstConnsMu:           &sync.Mutex{},
 	}
 
 	s.tlsConfig, err = createTLSConfig(config)
@@ -200,18 +210,25 @@ func (s *Server) Addr() (addr net.Addr) {
 // Start starts the pipe, exits immediately if it failed to start
 // listening.  Start returns once all servers are considered up.
 func (s *Server) Start() (err error) {
-	log.Info("Starting the pipe %s", s)
+	log.Info("Starting the server %s", s)
 
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
 	if s.started {
-		return errors.New("pipe is already started")
+		return errors.New("Server is already started")
 	}
 
 	s.listen, err = s.createListener()
 	if err != nil {
 		return fmt.Errorf("failed to start pipe: %w", err)
+	}
+
+	if s.probeReverseProxyURL != "" {
+		err = s.startProbeReverseProxy()
+		if err != nil {
+			return fmt.Errorf("failed to start probe reverse proxy: %w", err)
+		}
 	}
 
 	s.wg.Add(1)
@@ -241,14 +258,62 @@ func (s *Server) createListener() (l net.Listener, err error) {
 	return l, nil
 }
 
+// startProbeReverseProxy starts a reverse HTTP proxy that will be used for
+// answering unauthorized and probe requests. Returns the listener of that
+// proxy. Original request URI will be appended to proxyURL.
+func (s *Server) startProbeReverseProxy() (err error) {
+	proxyURL := s.probeReverseProxyURL
+
+	if _, err = url.Parse(proxyURL); err != nil {
+		return fmt.Errorf("reverse proxy URL must be a valid URL: %w", err)
+	}
+
+	targetURL, err := url.Parse(s.probeReverseProxyURL)
+	if err != nil {
+		return fmt.Errorf("reverse proxy URL must be a valid URL: %w", err)
+	}
+
+	handler := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(targetURL)
+			r.Out.Host = targetURL.Host
+		},
+	}
+
+	srv := &http.Server{
+		ReadHeaderTimeout: upgradeTimeout,
+		Handler:           handler,
+	}
+
+	s.probeReverseProxyListen, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("failed to start probe reverse proxy: %w", err)
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		log.Info("Starting probe reverse proxy")
+		sErr := srv.Serve(s.probeReverseProxyListen)
+		log.Info("Probe reverse proxy has been stopped due to: %v", sErr)
+	}()
+
+	return nil
+}
+
 // Shutdown stops the pipe and waits for all active connections to close.
 func (s *Server) Shutdown(ctx context.Context) (err error) {
-	log.Info("Stopping the pipe %s", s)
+	log.Info("Stopping the server %s", s)
 
 	s.stopServeLoop()
 
 	// Closing the udpConn thread.
 	log.OnCloserError(s.listen, log.DEBUG)
+
+	if s.probeReverseProxyListen != nil {
+		log.OnCloserError(s.probeReverseProxyListen, log.DEBUG)
+	}
 
 	// Closing active TCP connections.
 	s.closeConnections(s.srcConnsMu, s.srcConns)
@@ -323,7 +388,7 @@ func (s *Server) serve() {
 func (s *Server) acceptConn() (err error) {
 	conn, err := s.listen.Accept()
 	if err != nil {
-		// This type of errors should not lead to stopping the pipe.
+		// This type of errors should not lead to stopping the server.
 		if errors.Is(os.ErrDeadlineExceeded, err) {
 			return nil
 		}
@@ -338,18 +403,21 @@ func (s *Server) acceptConn() (err error) {
 
 	log.Debug("Accepted new connection from %s", conn.RemoteAddr())
 
-	func() {
-		s.srcConnsMu.Lock()
-		defer s.srcConnsMu.Unlock()
-
-		// Track the connection to allow unblocking reads on shutdown.
-		s.srcConns[conn] = struct{}{}
-	}()
+	s.saveSrcConn(conn)
 
 	s.wg.Add(1)
 	go s.serveConn(conn)
 
 	return nil
+}
+
+// saveSrcConn tracks the connection to allow unblocking reads on shutdown.
+func (s *Server) saveSrcConn(conn net.Conn) {
+	s.srcConnsMu.Lock()
+	defer s.srcConnsMu.Unlock()
+
+	// Track the connection to allow unblocking reads on shutdown.
+	s.srcConns[conn] = struct{}{}
 }
 
 // closeSrcConn closes the source connection and cleans up after it.
@@ -360,6 +428,15 @@ func (s *Server) closeSrcConn(conn net.Conn) {
 	defer s.srcConnsMu.Unlock()
 
 	delete(s.srcConns, conn)
+}
+
+// saveDstConn tracks the connection to allow unblocking reads on shutdown.
+func (s *Server) saveDstConn(conn net.Conn) {
+	s.dstConnsMu.Lock()
+	defer s.dstConnsMu.Unlock()
+
+	// Track the connection to allow unblocking reads on shutdown.
+	s.dstConns[conn] = struct{}{}
 }
 
 // closeDstConn closes the destination connection and cleans up after it.
@@ -425,23 +502,42 @@ func (s *Server) upgradeClientConn(conn net.Conn) (rwc io.ReadWriteCloser, err e
 	), nil
 }
 
-// respondWithDummyPage writes a dummy response to the client (part of active
-// probing protection).
-func (s *Server) respondWithDummyPage(conn net.Conn, req *http.Request) {
-	response := fmt.Sprintf("%s 403 Forbidden\r\n", req.Proto) +
-		"Server: nginx\r\n" +
-		fmt.Sprintf("Date: %s\r\n", time.Now().Format(http.TimeFormat)) +
-		"Content-Type: text/html\r\n" +
-		"Connection: close\r\n" +
-		"\r\n" +
-		"<html>\r\n" +
-		"<head><title>403 Forbidden</title></head>\r\n" +
-		"<center><h1>403 Forbidden</h1></center>\r\n" +
-		"<hr><center>nginx</center>\r\n" +
-		"</body>\r\n" +
-		"</html>\r\n"
+// respondToProbe writes a dummy response to the client if it's not authorized
+// or if it's a probe.
+func (s *Server) respondToProbe(rwc io.ReadWriteCloser, req *http.Request) {
+	if s.probeReverseProxyListen == nil {
+		log.Debug("No probe reverse proxy configured, respond with a dummy 403 page")
 
-	_, _ = conn.Write([]byte(response))
+		response := fmt.Sprintf("%s 403 Forbidden\r\n", req.Proto) +
+			"Server: nginx\r\n" +
+			fmt.Sprintf("Date: %s\r\n", time.Now().Format(http.TimeFormat)) +
+			"Content-Type: text/html\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"<html>\r\n" +
+			"<head><title>403 Forbidden</title></head>\r\n" +
+			"<center><h1>403 Forbidden</h1></center>\r\n" +
+			"<hr><center>nginx</center>\r\n" +
+			"</body>\r\n" +
+			"</html>\r\n"
+
+		_, _ = rwc.Write([]byte(response))
+
+		return
+	}
+
+	log.Debug("Probe reverse proxy is configured, tunnel data to it")
+
+	proxyConn, err := net.Dial("tcp", s.probeReverseProxyListen.Addr().String())
+	if err != nil {
+		log.Error("Failed to connect to the probe reverse proxy: %v", err)
+
+		return
+	}
+
+	s.saveDstConn(proxyConn)
+
+	tunnel.Tunnel("probeReverseProxy", rwc, proxyConn)
 }
 
 // upgradeServerConn attempts to upgrade the server connection and returns a
@@ -466,33 +562,33 @@ func (s *Server) upgradeServerConn(conn net.Conn) (rwc io.ReadWriteCloser, err e
 		return nil, fmt.Errorf("cannot read HTTP request: %w", err)
 	}
 
+	// Now that authentication check has been done restore the peeked up data
+	// so that it could be used further.
+	originalRwc := &readWriteCloser{
+		Reader: io.MultiReader(bytes.NewReader(buf.Bytes()), conn),
+		Writer: conn,
+		Closer: conn,
+	}
+
 	if !strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
-		s.respondWithDummyPage(conn, req)
+		s.respondToProbe(originalRwc, req)
 
 		return nil, fmt.Errorf("not a websocket")
 	}
 
 	clientPassword := req.URL.Query().Get("password")
 	if s.password != "" && clientPassword != s.password {
-		s.respondWithDummyPage(conn, req)
+		s.respondToProbe(originalRwc, req)
 
 		return nil, fmt.Errorf("wrong password: %s", clientPassword)
 	}
 
-	// Now that authentication check has been done restore the peeked up data
-	// and use ws.Upgrade to do the actual WebSocket upgrade.
-	multiRwc := &readWriteCloser{
-		Reader: io.MultiReader(bytes.NewReader(buf.Bytes()), conn),
-		Writer: conn,
-		Closer: conn,
-	}
-
-	_, err = ws.Upgrade(multiRwc)
+	_, err = ws.Upgrade(originalRwc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upgrade WebSocket: %w", err)
 	}
 
-	return newWsConn(multiRwc, conn.RemoteAddr(), ws.StateServerSide), nil
+	return newWsConn(originalRwc, conn.RemoteAddr(), ws.StateServerSide), nil
 }
 
 // serveConn processes incoming connection, authenticates it and proxies the
@@ -532,13 +628,7 @@ func (s *Server) processConn(rwc io.ReadWriteCloser) {
 		return
 	}
 
-	func() {
-		s.dstConnsMu.Lock()
-		defer s.dstConnsMu.Unlock()
-
-		// Track the connection to allow unblocking reads on shutdown.
-		s.dstConns[dstConn] = struct{}{}
-	}()
+	s.saveDstConn(dstConn)
 
 	var dstRwc io.ReadWriteCloser = dstConn
 	if !s.serverMode {

@@ -54,6 +54,11 @@ type Options struct {
 	// certificate specified by TLSCertPath.
 	TLSCertKey string `yaml:"tls-keyfile" long:"tls-keyfile" description:"Path to the private key for the cert specified in tls-certfile." value-name:"<path-to-key-file>"`
 
+	// ProbeReverseProxyURL is the URL that will be used by the reverse HTTP
+	// proxy to respond to unauthorized or proxy requests. If not specified,
+	// it will respond with a stub page 403 Forbidden.
+	ProbeReverseProxyURL string `yaml:"probe-reverseproxyurl" long:"probe-reverseproxyurl" description:"Unauthorized requests and probes will be proxied to the URL." value-name:"<hostname>"`
+
 	// Verbose defines whether we should write the DEBUG-level log or not.
 	Verbose bool `yaml:"verbose" short:"v" long:"verbose" description:"Verbose output (optional)." optional:"yes" optional-value:"true"`
 }

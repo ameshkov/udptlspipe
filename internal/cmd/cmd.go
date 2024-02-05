@@ -46,13 +46,14 @@ func Main() {
 	log.Info("Configuration:\n%s", o)
 
 	cfg := &pipe.Config{
-		ListenAddr:        o.ListenAddr,
-		DestinationAddr:   o.DestinationAddr,
-		Password:          o.Password,
-		ServerMode:        o.ServerMode,
-		ProxyURL:          o.ProxyURL,
-		VerifyCertificate: o.VerifyCertificate,
-		TLSServerName:     o.TLSServerName,
+		ListenAddr:           o.ListenAddr,
+		DestinationAddr:      o.DestinationAddr,
+		Password:             o.Password,
+		ServerMode:           o.ServerMode,
+		ProxyURL:             o.ProxyURL,
+		VerifyCertificate:    o.VerifyCertificate,
+		TLSServerName:        o.TLSServerName,
+		ProbeReverseProxyURL: o.ProbeReverseProxyURL,
 	}
 
 	if o.TLSCertPath != "" {
